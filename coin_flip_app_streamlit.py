@@ -8,18 +8,14 @@ def get_viewport_live():
     try:
         from streamlit_javascript import st_javascript  # lazy import
         js = """
-        // return current size immediately
         const w = window.innerWidth, h = window.innerHeight;
-
-        // install a one-time resize listener that pushes width back to Streamlit
         if (!window._st_resize_installed) {
           window._st_resize_installed = true;
           window.addEventListener('resize', () => {
-            const w2 = window.innerWidth;
             window.parent.postMessage(
               { isStreamlitMessage: true,
                 type: 'streamlit:setComponentValue',
-                value: [w2, window.innerHeight] }, '*');
+                value: [window.innerWidth, window.innerHeight] }, '*');
           });
         }
         return [w, h];
@@ -29,7 +25,6 @@ def get_viewport_live():
             return int(wh[0]), int(wh[1])
     except Exception:
         pass
-    # Fallback to query params (?w=390&h=844)
     qp = st.query_params
     w = int(qp.get("w", [0])[0]) if "w" in qp else 0
     h = int(qp.get("h", [0])[0]) if "h" in qp else 0
@@ -37,7 +32,6 @@ def get_viewport_live():
 
 def flags_from_viewport():
     w, h = get_viewport_live()
-    # Mobile if width < 800 (override with ?mobile=1 if desired)
     is_mobile = (w and w < 800) or st.query_params.get("mobile", ["0"])[0].lower() in ("1","true","yes")
     is_landscape = (w and h and w > h)
     return w, h, is_mobile, is_landscape
@@ -58,8 +52,11 @@ class Stats:
         return (self.wins/self.total*100) if self.total else 0.0
 
 if "thumb" not in st.session_state:
-    st.session_state.update(thumb=0, okaun=0, zndr=0, base=3,
-                            turn_wins=0, stats=Stats(), log=[])
+    st.session_state.update(
+        thumb=0, okaun=0, zndr=0, base=3,
+        turn_wins=0, stats=Stats(), log=[],
+        batch_n=10  # NEW: default batch size
+    )
 
 def log(msg): st.session_state.log.append(msg)
 def flip_coin(): return random.random() < 0.5
@@ -70,7 +67,8 @@ def flip_with_thumbs(n:int):
     return False
 def do_flip():
     win = flip_with_thumbs(st.session_state.thumb) if st.session_state.thumb>0 else flip_coin()
-    st.session_state.stats.record(win); return win
+    st.session_state.stats.record(win)
+    return win
 def sequence_until_lose():
     wins = 0
     while True:
@@ -86,13 +84,26 @@ def begin_combat():
     power = (st.session_state.base * (2**tw)) if st.session_state.okaun>0 else None
     return z_wins, o_wins, tw, cards, power
 
+# NEW: batch flipping
+def do_n_flips(n: int):
+    n = max(1, int(n))
+    wins = 0
+    losses = 0
+    for _ in range(n):
+        if do_flip():
+            wins += 1
+            st.session_state.turn_wins += 1  # wins this turn add up for Okaun/Zndrsplt
+        else:
+            losses += 1
+    log(f"Batch {n} flips → {wins}W / {losses}L (turn wins +{wins})")
+    return wins, losses
+
 # ========= Page + responsive style =========
 st.set_page_config(page_title="Coin Flip Tracker", page_icon="🪙",
                    layout="wide", initial_sidebar_state="collapsed")
 W, H, IS_MOBILE, IS_LANDSCAPE = flags_from_viewport()
 
 if IS_MOBILE:
-    # Global mobile styles; tighten padding
     st.markdown("""
     <style>
       [data-testid="stSidebar"]{display:none !important;}
@@ -103,7 +114,6 @@ if IS_MOBILE:
     </style>
     """, unsafe_allow_html=True)
     if IS_LANDSCAPE:
-        # Slightly smaller text in landscape so 3 columns fit comfortably
         st.markdown("""
         <style>
           .stMetric label, .stMetric span, button { font-size:16px !important; }
@@ -124,12 +134,13 @@ def settings_block():
 
 # ========= Layouts =========
 if IS_MOBILE and not IS_LANDSCAPE:
-    # ---- PORTRAIT: Tabs view (compact) ----
+    # ---- PORTRAIT: Tabs view ----
     with st.expander("Settings", expanded=False):
         settings_block()
 
     tabs = st.tabs(["⚡ Actions", "🎯 This Turn", "📊 Session"])
     with tabs[0]:
+        # Single / Begin / New / Reset
         c1, c2 = st.columns(2)
         if c1.button("Single Flip"):
             w = do_flip()
@@ -141,6 +152,13 @@ if IS_MOBILE and not IS_LANDSCAPE:
             if st.session_state.zndr>0: log(f"Z wins/copy: {z_wins} | Cards: {cards}")
             if st.session_state.okaun>0: log(f"O wins/copy: {o_wins} | Power(each): {power}")
             log(f"Total wins this turn: {tw}")
+
+        # NEW: Batch controls
+        st.session_state.batch_n = st.number_input("Batch flips (N)", 1, 10000, st.session_state.batch_n)
+        if st.button(f"Do {st.session_state.batch_n} Flips"):
+            do_n_flips(st.session_state.batch_n)
+
+        # Manual W/L
         c3, c4 = st.columns(2)
         if c3.button("New Turn"): st.session_state.turn_wins = 0; log("— New turn —")
         if c4.button("Reset"): st.session_state.stats = Stats(); st.session_state.turn_wins=0; st.session_state.log=[]; log("**Session reset**")
@@ -180,6 +198,12 @@ else:
             w = do_flip()
             if w: st.session_state.turn_wins += 1
             log(f"Single Flip → {'WIN' if w else 'LOSS'}")
+
+        # NEW: Batch controls (desktop/landscape)
+        st.session_state.batch_n = st.number_input("Batch flips (N)", 1, 10000, st.session_state.batch_n)
+        if st.button(f"Do {st.session_state.batch_n} Flips"):
+            do_n_flips(st.session_state.batch_n)
+
         col = st.columns(2)
         if col[0].button("Manual Win"): st.session_state.stats.record(True); st.session_state.turn_wins += 1; log("Manual → WIN")
         if col[1].button("Manual Loss"): st.session_state.stats.record(False); log("Manual → LOSS")
@@ -195,7 +219,7 @@ else:
         tw = st.session_state.turn_wins
         st.metric("Wins this turn", tw)
         st.metric("Zndrsplt cards (this turn)", st.session_state.zndr * tw)
-        st.metric("Okaun power (this turn)", (st.session_state.base * (2**tw)) if st.session_state.okaun>0 else "-")
+        st.metric("Okaun power (each, this turn)", (st.session_state.base * (2**tw)) if st.session_state.okaun>0 else "-")
 
     with c:
         st.subheader("Session Stats")
@@ -209,4 +233,3 @@ else:
 st.divider()
 st.subheader("Log")
 st.write("\n".join(st.session_state.log[-200:]) or "_(empty)_")
-
