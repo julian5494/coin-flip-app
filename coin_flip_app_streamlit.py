@@ -195,7 +195,7 @@ else:
         tw = st.session_state.turn_wins
         st.metric("Wins this turn", tw)
         st.metric("Zndrsplt cards (this turn)", st.session_state.zndr * tw)
-        st.metric("Okaun power (each, this turn)", (st.session_state.base * (2**tw)) if st.session_state.okaun>0 else "-")
+        st.metric("Okaun power (this turn)", (st.session_state.base * (2**tw)) if st.session_state.okaun>0 else "-")
 
     with c:
         st.subheader("Session Stats")
@@ -209,3 +209,4 @@ else:
 st.divider()
 st.subheader("Log")
 st.write("\n".join(st.session_state.log[-200:]) or "_(empty)_")
+
