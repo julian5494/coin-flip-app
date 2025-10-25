@@ -2,6 +2,18 @@
 import random
 import streamlit as st
 
+st.markdown("""
+<style>
+html, body, [class*="css"]  {
+    font-size: 18px !important;
+}
+[data-testid="stHeader"] {display: none;}
+.block-container {
+    max-width: 95vw;
+}
+</style>
+""", unsafe_allow_html=True)
+
 # --- simple in-page state ---
 class Stats:
     def __init__(self): self.total=0; self.wins=0; self.losses=0; self.longest=0; self.current=0
@@ -15,6 +27,21 @@ class Stats:
 
 if "thumb" not in st.session_state:
     st.session_state.update(thumb=0, okaun=0, zndr=0, base=3, turn_wins=0, stats=Stats(), log=[])
+
+st.set_page_config(page_title="Coin Flip Tracker", page_icon="🪙", layout="wide")
+
+# Detect if screen is narrow (like a phone)
+is_mobile = st.experimental_get_query_params().get("mobile", ["0"])[0] == "1"
+
+if is_mobile:
+    st.markdown("""
+        <style>
+        [data-testid="stSidebar"] {display: none;}
+        .block-container {padding-top: 0.5rem; padding-left: 0.5rem; padding-right: 0.5rem;}
+        button, input, select {font-size: 20px !important;}
+        </style>
+    """, unsafe_allow_html=True)
+
 
 def flip_coin(): return random.random() < 0.5
 
@@ -61,7 +88,15 @@ with st.sidebar:
     if col[0].button("New Turn"): st.session_state.turn_wins = 0; log("— New turn —")
     if col[1].button("Reset Session"): st.session_state.stats = Stats(); st.session_state.turn_wins=0; st.session_state.log=[]; log("**Session reset**")
 
-a,b,c = st.columns(3)
+if is_mobile:
+    # Stack vertically on phones
+    a = st.container()
+    b = st.container()
+    c = st.container()
+else:
+    # Three columns on desktop
+    a, b, c = st.columns(3)
+
 with a:
     st.subheader("Actions")
     if st.button("Single Flip"):
