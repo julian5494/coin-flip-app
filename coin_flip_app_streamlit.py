@@ -2,30 +2,47 @@
 import random
 import streamlit as st
 
-# ---------- detect device + orientation ----------
-def get_viewport():
-    """Return (width, height). Falls back to query params if JS unavailable."""
+# ========= Live viewport + orientation (auto-rerun on rotate) =========
+def get_viewport_live():
+    """Returns (width, height). Uses a JS resize listener to trigger reruns."""
     try:
         from streamlit_javascript import st_javascript  # lazy import
-        width = st_javascript("window.innerWidth")
-        height = st_javascript("window.innerHeight")
-        if isinstance(width, (int, float)) and isinstance(height, (int, float)) and width > 0 and height > 0:
-            return int(width), int(height)
+        js = """
+        // return current size immediately
+        const w = window.innerWidth, h = window.innerHeight;
+
+        // install a one-time resize listener that pushes width back to Streamlit
+        if (!window._st_resize_installed) {
+          window._st_resize_installed = true;
+          window.addEventListener('resize', () => {
+            const w2 = window.innerWidth;
+            window.parent.postMessage(
+              { isStreamlitMessage: true,
+                type: 'streamlit:setComponentValue',
+                value: [w2, window.innerHeight] }, '*');
+          });
+        }
+        return [w, h];
+        """
+        wh = st_javascript(js)
+        if isinstance(wh, (list, tuple)) and len(wh) == 2:
+            return int(wh[0]), int(wh[1])
     except Exception:
         pass
-    # Fallback: allow manual overrides via URL, e.g., ?w=390&h=844
+    # Fallback to query params (?w=390&h=844)
     qp = st.query_params
     w = int(qp.get("w", [0])[0]) if "w" in qp else 0
     h = int(qp.get("h", [0])[0]) if "h" in qp else 0
     return w, h
 
-def device_flags():
-    w, h = get_viewport()
-    is_mobile = (w and w < 800) or st.query_params.get("mobile", ["0"])[0] in ("1","true","True","yes")
+def flags_from_viewport():
+    w, h = get_viewport_live()
+    # Mobile if width < 800 (override with ?mobile=1 if desired)
+    is_mobile = (w and w < 800) or st.query_params.get("mobile", ["0"])[0].lower() in ("1","true","yes")
     is_landscape = (w and h and w > h)
     return w, h, is_mobile, is_landscape
 
-# ---------- core state & logic ----------
+# ========= Core state & logic =========
 class Stats:
     def __init__(self):
         self.total = 0; self.wins = 0; self.losses = 0
@@ -41,7 +58,8 @@ class Stats:
         return (self.wins/self.total*100) if self.total else 0.0
 
 if "thumb" not in st.session_state:
-    st.session_state.update(thumb=0, okaun=0, zndr=0, base=3, turn_wins=0, stats=Stats(), log=[])
+    st.session_state.update(thumb=0, okaun=0, zndr=0, base=3,
+                            turn_wins=0, stats=Stats(), log=[])
 
 def log(msg): st.session_state.log.append(msg)
 def flip_coin(): return random.random() < 0.5
@@ -52,10 +70,9 @@ def flip_with_thumbs(n:int):
     return False
 def do_flip():
     win = flip_with_thumbs(st.session_state.thumb) if st.session_state.thumb>0 else flip_coin()
-    st.session_state.stats.record(win)
-    return win
+    st.session_state.stats.record(win); return win
 def sequence_until_lose():
-    wins=0
+    wins = 0
     while True:
         if do_flip(): wins += 1
         else: break
@@ -69,12 +86,13 @@ def begin_combat():
     power = (st.session_state.base * (2**tw)) if st.session_state.okaun>0 else None
     return z_wins, o_wins, tw, cards, power
 
-# ---------- page setup ----------
-st.set_page_config(page_title="Coin Flip Tracker", page_icon="🪙", layout="wide", initial_sidebar_state="collapsed")
-W, H, IS_MOBILE, IS_LANDSCAPE = device_flags()
+# ========= Page + responsive style =========
+st.set_page_config(page_title="Coin Flip Tracker", page_icon="🪙",
+                   layout="wide", initial_sidebar_state="collapsed")
+W, H, IS_MOBILE, IS_LANDSCAPE = flags_from_viewport()
 
-# global styles (tighten padding; enlarge touch targets on mobile)
 if IS_MOBILE:
+    # Global mobile styles; tighten padding
     st.markdown("""
     <style>
       [data-testid="stSidebar"]{display:none !important;}
@@ -84,22 +102,29 @@ if IS_MOBILE:
       [data-testid="stHeader"]{display:none;}
     </style>
     """, unsafe_allow_html=True)
+    if IS_LANDSCAPE:
+        # Slightly smaller text in landscape so 3 columns fit comfortably
+        st.markdown("""
+        <style>
+          .stMetric label, .stMetric span, button { font-size:16px !important; }
+          .block-container{padding:0.4rem 0.5rem !important;}
+        </style>
+        """, unsafe_allow_html=True)
 else:
     st.markdown("<style>.block-container{max-width:1200px;}</style>", unsafe_allow_html=True)
 
 st.title("🪙 Coin Flip Tracker — Okaun / Zndrsplt / Krark’s Thumb")
 st.caption("Z cards = copies × wins this turn • Okaun power = base × 2^(wins this turn)")
 
-# ---------- SETTINGS ----------
 def settings_block():
     st.session_state.thumb = st.number_input("Krark’s Thumb copies", 0, 8, st.session_state.thumb)
     st.session_state.okaun = st.number_input("Okaun copies", 0, 12, st.session_state.okaun)
     st.session_state.zndr  = st.number_input("Zndrsplt copies", 0, 12, st.session_state.zndr)
     st.session_state.base  = st.number_input("Okaun base power", 1, 99, st.session_state.base)
 
-# layout: portrait mobile → tabs; landscape mobile/desktop → columns
+# ========= Layouts =========
 if IS_MOBILE and not IS_LANDSCAPE:
-    # ---------- PORTRAIT (tabs for compact view) ----------
+    # ---- PORTRAIT: Tabs view (compact) ----
     with st.expander("Settings", expanded=False):
         settings_block()
 
@@ -119,7 +144,6 @@ if IS_MOBILE and not IS_LANDSCAPE:
         c3, c4 = st.columns(2)
         if c3.button("New Turn"): st.session_state.turn_wins = 0; log("— New turn —")
         if c4.button("Reset"): st.session_state.stats = Stats(); st.session_state.turn_wins=0; st.session_state.log=[]; log("**Session reset**")
-        # manual
         m1, m2 = st.columns(2)
         if m1.button("Manual Win"): st.session_state.stats.record(True); st.session_state.turn_wins += 1; log("Manual → WIN")
         if m2.button("Manual Loss"): st.session_state.stats.record(False); log("Manual → LOSS")
@@ -138,8 +162,7 @@ if IS_MOBILE and not IS_LANDSCAPE:
         st.metric("Streak / Longest", f"{S.current} / {S.longest}")
 
 else:
-    # ---------- LANDSCAPE (mobile) or DESKTOP → multi-column ----------
-    # sidebar settings on desktop; expander on landscape mobile
+    # ---- LANDSCAPE (mobile) or DESKTOP: 3 columns ----
     if IS_MOBILE:
         with st.expander("Settings", expanded=False): settings_block()
     else:
@@ -182,7 +205,7 @@ else:
         st.metric("Win rate", f"{S.win_rate():.1f}%")
         st.metric("Streak / Longest", f"{S.current} / {S.longest}")
 
-# ---------- Log ----------
+# ---- Log ----
 st.divider()
 st.subheader("Log")
 st.write("\n".join(st.session_state.log[-200:]) or "_(empty)_")
